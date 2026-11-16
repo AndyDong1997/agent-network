@@ -327,6 +327,10 @@ describe("P0 runtime gate — name resolution", () => {
     // RFC-029 — opencode CLI bucket.
     expect(runtimeBucket("opencode-cli")).toBe("opencode");
     expect(runtimeBucket("opencode")).toBe("opencode");
+    // DeepSeek Harness (DSH) native runtime bucket + aliases.
+    expect(runtimeBucket("dsh")).toBe("dsh");
+    expect(runtimeBucket("dsh-cli")).toBe("dsh");
+    expect(runtimeBucket("deepseek-harness")).toBe("dsh");
     expect(runtimeBucket("mystery")).toBe("unknown");
     expect(runtimeBucket(null)).toBe("unknown");
     expect(runtimeBucket(undefined)).toBe("unknown");
@@ -483,6 +487,19 @@ describe("#144 round-6 — decideStartupAction (refined-B matrix)", () => {
 
   test("grok + only grok goals → ok", () => {
     const a = decideStartupAction("grok", [activeGoal("grok-build-acp")]);
+    expect(a.kind).toBe("ok");
+  });
+
+  // ── dsh: native DeepSeek Harness runtime is a first-class bucket ──
+
+  test("dsh + empty → ok (scheduler runs for the dsh bucket)", () => {
+    const a = decideStartupAction("dsh", []);
+    expect(a.kind).toBe("ok");
+    expect(a.runScheduler).toBe(true);
+  });
+
+  test("dsh + only dsh goals → ok", () => {
+    const a = decideStartupAction("dsh", [activeGoal("dsh")]);
     expect(a.kind).toBe("ok");
   });
 

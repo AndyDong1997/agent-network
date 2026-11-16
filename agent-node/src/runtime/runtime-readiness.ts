@@ -164,6 +164,20 @@ const SPECS: Record<string, RuntimeSpec> = {
     loginHint: "",
     endpoint: "https://opencode.ai",
   },
+  // DeepSeek Harness (DSH) — native headless runtime. CLI is `dsh`
+  // (or an absolute path in DSH_BIN). Credentials live in the node's dsh
+  // profile (~/.dsh/.credentials.yaml) or DEEPSEEK_API_KEY. provider/model
+  // is chosen per dsh profile and may point at any gateway (api.deepseek.com,
+  // a self-hosted gateway, a LAN endpoint), so readiness does NOT probe a
+  // single fixed endpoint — see the `dsh` special-case in probeOne().
+  "dsh": {
+    cli: "dsh",
+    installHint: `安装 DeepSeek Harness CLI(dsh),并确保它在 PATH 上(或在节点 config.json 用 flags.dshBin / 环境变量 DSH_BIN 指定绝对路径),${ON_CHILD_PATH}`,
+    authFiles: [".dsh/.credentials.yaml"],
+    authEnvKeys: ["DEEPSEEK_API_KEY", "DSH_API_KEY"],
+    loginHint: "在这台机器上完成 dsh 登录(生成 ~/.dsh/.credentials.yaml),或在节点环境里提供 DEEPSEEK_API_KEY;provider/模型在节点的 dsh profile 里配置",
+    endpoint: "https://api.deepseek.com",
+  },
 };
 
 export const PROBED_RUNTIMES: readonly string[] = Object.keys(SPECS);
@@ -328,6 +342,28 @@ async function probeOne(runtime: string, deps: ReadinessDeps, stepTimeoutMs: num
     out.reason = accepted
       ? "检测到 OpenCode V2;provider、模型和登录取决于目标节点配置,不能用 opencode.ai 的连通性确认。创建时仍需校验准确版本、显式工具授权和启动结果"
       : `检测到 OpenCode 2.x（${out.version ?? "未解析"}），不是本发行接受的 ${support.packageName}@${support.pin}；显式创建 v2 会被拒绝。provider 与模型仍用 OpenCode 自己的配置，本检查不套用 anet provider 预设`;
+    return out;
+  }
+
+  // DeepSeek Harness (DSH): provider/model is chosen per dsh profile and may
+  // point at any gateway (api.deepseek.com, a self-hosted gateway, a LAN
+  // endpoint), so a single fixed endpoint cannot establish reachability.
+  // Judge on CLI presence + credentials existence only; keep network
+  // "skipped" with an explicit note. A missing CLI still falls through to
+  // the normal missing_cli verdict below.
+  if (runtime === "dsh" && out.cli === "found") {
+    const fileHit = spec.authFiles.some((rel) => deps.fileExists(join(deps.home, rel)));
+    const envHit = spec.authEnvKeys.some((k) => typeof deps.childEnv[k] === "string" && deps.childEnv[k] !== "");
+    out.auth = (fileHit || envHit) ? "present" : "absent";
+    out.network = "skipped";
+    if (out.auth === "present") {
+      out.state = "ready";
+      out.ok = true;
+      out.reason = "检测到 dsh CLI 与凭据;provider/模型取决于该节点的 dsh profile 配置(可指向任意网关),不能用单一端点确认连通性";
+    } else {
+      out.state = "not_logged_in";
+      out.reason = `检测到 dsh CLI,但这台机器上没有 dsh 凭据(~/.dsh/.credentials.yaml 或 DEEPSEEK_API_KEY)。修法:${spec.loginHint}`;
+    }
     return out;
   }
 

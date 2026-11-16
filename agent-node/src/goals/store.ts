@@ -86,7 +86,15 @@ const OPENCODE_RUNTIME_NAMES = new Set([
   "opencode-cli",
 ]);
 
-export type RuntimeBucket = "claude" | "codex" | "grok" | "opencode" | "unknown";
+// DeepSeek Harness (DSH) — native headless runtime. `dsh` is canonical;
+// aliases dsh-cli / deepseek-harness (mirrors cli.ts RUNTIME_MAP).
+const DSH_RUNTIME_NAMES = new Set([
+  "dsh",
+  "dsh-cli",
+  "deepseek-harness",
+]);
+
+export type RuntimeBucket = "claude" | "codex" | "grok" | "opencode" | "dsh" | "unknown";
 
 /** Map any user-facing runtime name to its canonical bucket (mirrors cli.ts RUNTIME_MAP). */
 export function runtimeBucket(rt: string | undefined | null): RuntimeBucket {
@@ -95,6 +103,7 @@ export function runtimeBucket(rt: string | undefined | null): RuntimeBucket {
   if (CODEX_RUNTIME_NAMES.has(rt)) return "codex";
   if (GROK_RUNTIME_NAMES.has(rt)) return "grok";
   if (OPENCODE_RUNTIME_NAMES.has(rt)) return "opencode";
+  if (DSH_RUNTIME_NAMES.has(rt)) return "dsh";
   return "unknown";
 }
 
