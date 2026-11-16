@@ -20,7 +20,8 @@ export type RuntimeName =
   | "grok-build-acp"
   | "grok-build-cli"
   | "opencode-cli"
-  | "codex-app-server";
+  | "codex-app-server"
+  | "dsh";
 
 /** 一个 runtime 复用的是哪种**外部登录态**，而不是 API key。 */
 export type ReusedLogin = "claude" | "codex" | "grok";
@@ -32,6 +33,7 @@ export type ReusedLogin = "claude" | "codex" | "grok";
  * 不在表里 = 该 runtime 走 API key，不复用任何登录：
  *   · `claude-agent-sdk` —— 走 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY
  *   · `opencode-cli`     —— 走 ANTHROPIC_API_KEY / OPENAI_API_KEY（vendor preset 从 env 读，不 prompt）
+ *   · `dsh`              —— 走 DeepSeek Harness 自己的模型配置（API key），不复用外部登录
  * 这条区分是有意写下来的：Vincent 那句「复用会员登录状态、不用自己输 key 和 url」
  * 点名的是 Claude Code / Codex / Grok 三家，opencode 不在其中，别顺手加进来。
  */
@@ -59,6 +61,7 @@ export const SUPPORTED_RUNTIME_NAMES: readonly RuntimeName[] = [
   "grok-build-acp",
   "grok-build-cli",
   "opencode-cli",
+  "dsh",
 ] as const;
 
 // Subset of Profile fields this helper inspects. Keeping it narrow so
@@ -106,6 +109,11 @@ function canonicalizeRuntime(runtime: string): RuntimeName | undefined {
   // `opencode` (short), `opencode-cli` (canonical, matches
   // claude-code-cli precedent).
   if (runtime === "opencode" || runtime === "opencode-cli") return "opencode-cli";
+  // DeepSeek Harness (DSH) — native runtime. Aliases: dsh (canonical), dsh-cli,
+  // deepseek-harness. DSH is an MCP-capable harness, so it integrates the same
+  // way as other runtimes: launch it with the CommHub MCP server attached
+  // (see agent-network/src/dsh-runtime.ts).
+  if (runtime === "dsh" || runtime === "dsh-cli" || runtime === "deepseek-harness") return "dsh";
   return undefined;
 }
 
