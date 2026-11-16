@@ -682,6 +682,10 @@ const RUNTIME_MAP: Record<string, string> = {
   // bucket from `codex` (that's the @openai/codex-sdk transport). Aliases:
   // `codex-app-server` (canonical) / `codex-tui` / `codex-appserver`.
   "codex-app-server": "codex-app-server", "codex-appserver": "codex-app-server", "codex-tui": "codex-app-server",
+  // DeepSeek Harness (DSH) — native headless runtime. `dsh` is canonical;
+  // aliases dsh-cli / deepseek-harness. Internal bucket "dsh"; execution
+  // spawns `dsh headless "<task>"` per turn (see processWithDsh).
+  "dsh": "dsh", "dsh-cli": "dsh", "deepseek-harness": "dsh",
 };
 // 🔴 `claude-code-cli` is intentionally NOT a key here (#909). Its execution lane lives in the LAUNCHER
 //    (`agent-network/bin/cli.ts` — `anet node start` → launchAgent → spawns the real `claude` CLI, ~:5096)
@@ -706,7 +710,7 @@ if (!Object.prototype.hasOwnProperty.call(RUNTIME_MAP, rawRuntime)) {
   console.error(`[${ALIAS}] Unsupported runtime "${rawRuntime}". Supported: ${supported}`);
   process.exit(1);
 }
-const RUNTIME = RUNTIME_MAP[rawRuntime] as "claude" | "codex" | "grok" | "opencode" | "codex-app-server";
+const RUNTIME = RUNTIME_MAP[rawRuntime] as "claude" | "codex" | "grok" | "opencode" | "codex-app-server" | "dsh";
 const RUNTIME_LABEL = rawRuntime; // 日志用原始名
 // `grok-build-cli` defaults to the compatible `grok -p` headless lane.
 // `grokCopresence:true` explicitly switches it to the single PTY-owner bridge
@@ -3768,6 +3772,76 @@ const CODEX_CONFIG = new Proxy({} as Record<string, any>, {
   getOwnPropertyDescriptor: (_t, prop) => Object.getOwnPropertyDescriptor(getCodexConfig(), prop),
 });
 
+// DeepSeek Harness (DSH) native runtime — per-turn headless execution.
+// Spawns `dsh headless "<prompt>"`, captures stdout as the turn's reply. The
+// CommHub task receive/reply lifecycle is owned by the node (as with other
+// runtimes); DSH is the reasoning/execution brain for the turn. DSH is an
+// MCP-capable harness, so a future phase can also pass the CommHub MCP server
+// (see agent-network/src/dsh-runtime.ts) for direct multi-agent tool calls.
+async function processWithDsh(
+  task: string,
+  from: string,
+  images?: string[],
+  evidence?: TaskRuntimeEvidenceReporter,
+): Promise<string> {
+  void evidence;
+  const { spawn } = await import("node:child_process");
+  const dshBin = process.env.DSH_BIN || "dsh";
+  const workDir = ((fileConfig as any)?.workdir as string) || process.cwd();
+  const parts: string[] = [];
+  parts.push(
+    "你是 " + ALIAS + "，一个运行在 DeepSeek Harness 上的 AI Agent 节点。收到来自 " + from +
+    " 的任务，请直接完成并只输出最终结果（一次性 headless 执行，输出会回传给请求方）。",
+  );
+  if (workDir) parts.push("工作目录：" + workDir);
+  if (images && images.length) {
+    parts.push("附带图片（本地路径，可读取）：\n" + images.map((p) => "- " + p).join("\n"));
+  }
+  parts.push("任务：");
+  parts.push(task);
+  const prompt = parts.join("\n\n");
+  const timeoutMs = Number(process.env.DSH_TURN_TIMEOUT_MS || "") || 300000;
+  return await new Promise<string>((resolve) => {
+    let out = "";
+    let err = "";
+    let done = false;
+    let child: any;
+    try {
+      child = spawn(dshBin, ["headless", prompt], {
+        cwd: workDir,
+        env: { ...process.env },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (e: any) {
+      resolve("dsh runtime 启动失败：" + (e?.message || e) + "（检查 dsh 是否在 PATH，或设 DSH_BIN）");
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      try { child.kill("SIGKILL"); } catch {}
+      resolve(
+        "执行超时(>" + Math.round(timeoutMs / 1000) + "s)：dsh headless 未完成，已中断。\n--- 部分输出 ---\n" +
+        (out || err).slice(-2000),
+      );
+    }, timeoutMs);
+    (timer as any).unref?.();
+    child.stdout?.on("data", (d: Buffer) => { out += d.toString("utf8"); });
+    child.stderr?.on("data", (d: Buffer) => { err += d.toString("utf8"); });
+    child.on("error", (e: any) => {
+      if (done) return; done = true; clearTimeout(timer);
+      resolve("dsh runtime 启动失败：" + (e?.message || e) + "（检查 dsh 是否在 PATH，或设 DSH_BIN）");
+    });
+    child.on("close", (code: number | null) => {
+      if (done) return; done = true; clearTimeout(timer);
+      const text = out.trim();
+      if (text) resolve(text);
+      else resolve("dsh headless 无输出(exit " + code + ")。stderr:\n" + err.slice(-1500));
+    });
+  });
+}
+
+
 async function processWithCodex(
   task: string,
   from: string,
@@ -5911,6 +5985,9 @@ function think(
       }
       if (RUNTIME === "codex-app-server") {
         return await processWithCodexAppServer(task, from, taskId, steerIfExternalTurn, evidence, trackReceipt);
+      }
+      if (RUNTIME === "dsh") {
+        return await processWithDsh(task, from, images, evidence);
       }
       return await processWithClaude(task, from, images, evidence);
     } finally {
